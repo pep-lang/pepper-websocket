@@ -30,12 +30,17 @@ jobs:
 
       - name: Install Pepper (Unix)
         if: runner.os != 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           curl -fsSL https://raw.githubusercontent.com/pep-lang/pepper/main/scripts/install.sh | sh
           echo "$HOME/.pepper/bin" >> "$GITHUB_PATH"
 
       - name: Install Pepper (Windows)
         if: runner.os == 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           irm https://raw.githubusercontent.com/pep-lang/pepper/main/scripts/install.ps1 | iex

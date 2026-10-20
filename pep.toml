@@ -1,6 +1,6 @@
 [package]
-name = "mypkg"
+name = "websocket"
 version = "0.1.0"
-description = "One line saying what the package does"
+description = "WebSocket (RFC 6455): client and server over TCP and TLS"
 license = "Apache-2.0"
-repository = "https://github.com/OWNER/pepper-mypkg"
+repository = "https://github.com/pep-lang/pepper-websocket"

@@ -1,6 +1,6 @@
 [package]
 name = "websocket"
-version = "0.1.0"
+version = "1.0.0"
 description = "WebSocket (RFC 6455): client and server over TCP and TLS"
 license = "Apache-2.0"
 repository = "https://github.com/pep-lang/pepper-websocket"

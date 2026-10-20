@@ -3,7 +3,7 @@
 [WebSocket (RFC 6455)](https://www.rfc-editor.org/rfc/rfc6455) for
 [Pepper](https://github.com/pep-lang/pepper): a client and a server, over
 TCP (`ws://`) and TLS (`wss://`), built on the runtime's `io`, `tls`,
-`http`, `digest`, `base64` and `random` modules.
+`digest`, `base64` and `random` modules.
 
 One module, **`websocket`**:
 
@@ -16,13 +16,6 @@ One module, **`websocket`**:
   A request that is not a valid upgrade gets `400 Bad Request` (`426
   Upgrade Required` for a version other than 13). The client's request is
   in `socket.request`: its `url` (`/chat?room=1`) and `headers`.
-- **`WebSocket.accept(request, handler)`** answers a WebSocket request
-  that an `http.Server` handler got: it returns the `101` response for the
-  handler to return, then calls `handler(socket)` on the connection. A
-  WebSocket route so shares a port, and `http.Server.bind_tls`'s TLS, with
-  ordinary HTTP routes. It refuses a request that is not a valid upgrade
-  the same way, and one that `request.can_upgrade()` rejects (HTTP/1.0,
-  HTTP/2) with `501 Not Implemented`.
 - **`send_text`**, **`send_binary`** and **`ping`** send a message;
   **`send_frame`** sends one `Frame` as it is, for a message in fragments.
 - **`receive()`** returns the next whole `Message`, joining fragments,
@@ -69,43 +62,15 @@ main(): int {
 }
 ```
 
-The same echo as a route of an `http.Server`, next to plain HTTP:
-
-```pepper
-import async;
-import http;
-import io;
-import websocket;
-
-route(request: http.Request): http.Response {
-    if (request.path() == "/chat") {
-        return websocket.WebSocket.accept(request, (socket) => {
-            var message = socket.receive().value();
-            socket.send_text("echo: " + message.text());
-            socket.receive();   # the Close message
-        });
-    }
-    return http.Response(200).set_text("hello over HTTP");
-}
-
-main(): int {
-    async.run(() => {
-        var server = http.Server.bind(io.SocketAddress.parse("0.0.0.0:8080").value()).value();
-        server.serve(route);
-    });
-    return 0;
-}
-```
-
 ## Limits
 
-- A connection from `accept(request, handler)` has no read timeout
-  (`set_read_timeout` returns an error): `http.Connection` has none.
+- `http.Server` cannot hand a connection over after a `101`, so a server
+  accepts WebSocket connections on its own listener rather than upgrading
+  a request from an `http.Server` handler.
 - No extensions (permessage-deflate) or subprotocol negotiation; a
   client's `Sec-WebSocket-Protocol` is in `request.headers` for a server
   to read, but `accept` does not answer it.
-- No WebSocket over HTTP/2 (RFC 8441): `accept(request, handler)` refuses
-  a request on an HTTP/2 stream with `501`.
+- No WebSocket over HTTP/2 (RFC 8441).
 - A connection belongs to one task at a time: a task that sends while
   another receives on the same connection could interleave frames.
 - The client sends no `Origin`; it follows no redirects.
@@ -140,9 +105,7 @@ runs the `[Test]` functions in `tests/` with `pepper test`: the wire
 format and the RFC's examples (`frame_test.pep`), and connections over
 loopback (`connection_test.pep`): client and server round trips over TCP
 and TLS, fragments and pings, both sides closing first, the size limit,
-and a hand-written client that breaks the protocol. `server_test.pep`
-runs WebSocket routes of an `http.Server` over TCP and TLS, beside a
-plain HTTP route on the same port, and the requests a route refuses. The TLS test uses the
+and a hand-written client that breaks the protocol. The TLS test uses the
 runtime's self-signed test certificate in `tests/testdata/`, whose key is
 public.
 

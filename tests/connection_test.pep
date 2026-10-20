@@ -234,6 +234,22 @@ server_refuses_a_bad_handshake() {
             expect_true(text.Utf8.decode_lossy(answer).starts_with("HTTP/1.1 400 "));
             expect_true(refused.join().value());
 
+            # A version other than 13 is told which one to use.
+            var old_version = async.Task<bool>.spawn_local(() => {
+                var (tcp, peer) = listener.accept().value();
+                return websocket.WebSocket.accept(tcp).is_err();
+            });
+            var old = io.TcpStream.connect(listener.local_address().value()).value();
+            var request = "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                + "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 8\r\n\r\n";
+            old.write_all(request.bytes());
+            var refusal = Array<u8>();
+            while (old.read(refusal, 4096).value() > 0) {}
+            var refusal_text = text.Utf8.decode_lossy(refusal);
+            expect_true(refusal_text.starts_with("HTTP/1.1 426 "));
+            expect_true(refusal_text.contains("Sec-WebSocket-Version: 13\r\n"));
+            expect_true(old_version.join().value());
+
             # A plain HTTP server is not a WebSocket server.
             var http_server = async.Task<void>.spawn_local(() => {
                 var (tcp, peer) = listener.accept().value();
@@ -247,6 +263,29 @@ server_refuses_a_bad_handshake() {
             expect_true(client.error().message.contains("refused the upgrade"));
             http_server.join();
             expect_true(websocket.WebSocket.connect("http://example.com/").is_err());
+        }
+    );
+}
+
+[Test]
+refuses_a_close_frame_and_times_out_a_silent_peer() {
+    async.run(
+        () => {
+            var listener = listen();
+            # A server that finishes the handshake and then never answers.
+            var server = async.Task<void>.spawn_local(() => {
+                var (tcp, peer) = listener.accept().value();
+                var socket = websocket.WebSocket.accept(tcp).value();
+                var rest = Array<u8>();
+                while (tcp.read(rest, 4096).ok_or(0) > 0) {}
+            });
+            var client = websocket.WebSocket.connect(url_of(listener, "ws")).value();
+            expect_true(client.send_frame(websocket.Frame(websocket.Opcode.Close, Array<u8>())).is_err());
+            expect_true(client.is_open());
+            expect_true(client.set_read_timeout(100).is_ok());
+            expect_true(client.close().is_err());
+            expect_false(client.is_open());
+            server.join();
         }
     );
 }

@@ -280,6 +280,21 @@ export struct WebSocket {
         return !_closed && !_close_sent;
     }
 
+    ## Makes `receive` and `close` give up with an error when nothing
+    ## arrives for `milliseconds`, which also closes the connection. By
+    ## default they wait as long as it takes, so set one when a peer might
+    ## never answer.
+    ##
+    ## @param milliseconds how long a read may wait; 0 to wait forever
+    ## @returns an Ok result; the platform error when the socket refuses it
+    set_read_timeout(milliseconds: ulong): Result<void> {
+        var set = _tcp.set_read_timeout(milliseconds);
+        if (set.is_err()) {
+            return Result<void>.err(Error(set.error().message));
+        }
+        return Result<void>.ok();
+    }
+
     ## Sends a text message in one frame.
     ##
     ## @param message the text
@@ -314,11 +329,15 @@ export struct WebSocket {
     ##
     ## @param frame the frame to send
     ## @returns an Ok result once it is written; an error when the
-    ##   connection is closed, a control frame is fragmented or carries more
-    ##   than `MAX_CONTROL_PAYLOAD` bytes, or the write fails
+    ##   connection is closed, the frame is a `Close` (use `close`), a
+    ##   control frame is fragmented or carries more than
+    ##   `MAX_CONTROL_PAYLOAD` bytes, or the write fails
     send_frame(frame: Frame): Result<void> {
         if (!is_open()) {
             return Result<void>.err(Error("the connection is closed"));
+        }
+        if (frame.opcode == Opcode.Close) {
+            return Result<void>.err(Error("send a close with close(), which runs the closing handshake"));
         }
         if (frame.is_control() && (!frame.fin || frame.payload.count > MAX_CONTROL_PAYLOAD)) {
             return Result<void>.err(Error("a control frame must be one frame of at most 125 bytes"));
@@ -395,7 +414,8 @@ export struct WebSocket {
     ## Runs the closing handshake: sends a close with `code` and `reason`,
     ## reads until the peer's close (dropping any messages still on the
     ## way), and closes the connection. Closing a closed connection does
-    ## nothing.
+    ## nothing. It waits for the peer as `receive` does: see
+    ## `set_read_timeout`.
     ##
     ## @param code the status code, such as `CLOSE_NORMAL`
     ## @param reason why, in at most 123 bytes of UTF-8

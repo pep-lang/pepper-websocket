@@ -1,0 +1,6 @@
+[package]
+name = "mypkg"
+version = "0.1.0"
+description = "One line saying what the package does"
+license = "Apache-2.0"
+repository = "https://github.com/OWNER/pepper-mypkg"

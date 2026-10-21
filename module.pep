@@ -3,9 +3,7 @@
 ##
 ## Bring it in with `import websocket`. A client opens a connection with
 ## `WebSocket.connect(url)`; a server runs the handshake on a connection its
-## listener accepted with `WebSocket.accept(tcp)`, or answers a request an
-## `http.Server` handler got with `WebSocket.accept(request, handler)`, which
-## shares the server's port with plain HTTP. Either end then sends
+## listener accepted with `WebSocket.accept(tcp)`. Either end then sends
 ## with `send_text` and `send_binary` and gets whole messages from
 ## `receive`, which joins fragments, answers pings, and checks the protocol.
 ## Every call that waits parks only its task inside `async.run`.

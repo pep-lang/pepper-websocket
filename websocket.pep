@@ -149,21 +149,14 @@ export struct WebSocket {
     ## @param client true for the client end
     construct(tcp: io.TcpStream, stream: tls.TlsStream?, client: bool) {
         this.request = http.Request();
-        this.max_message_size = DEFAULT_MAX_MESSAGE_SIZE;
         this._tcp = Optional<io.TcpStream>.Value(tcp);
         this._tls = stream;
         this._connection = Optional<http.Connection>.Empty;
-        this._reader = tcp;
-        this._writer = tcp;
         if (stream.is_value()) {
-            this._reader = stream.value();
-            this._writer = stream.value();
+            _init_stream(stream.value(), stream.value(), client);
+        } else {
+            _init_stream(tcp, tcp, client);
         }
-        this._client = client;
-        this._buffer = Array<u8>();
-        this._start = 0;
-        this._close_sent = false;
-        this._closed = false;
     }
 
     ## Wraps a connection an `http.Server` handler took over after the
@@ -173,13 +166,19 @@ export struct WebSocket {
     ## @param connection the connection the server handed over
     construct(request: http.Request, connection: http.Connection) {
         this.request = request;
-        this.max_message_size = DEFAULT_MAX_MESSAGE_SIZE;
         this._tcp = Optional<io.TcpStream>.Empty;
         this._tls = Optional<tls.TlsStream>.Empty;
         this._connection = Optional<http.Connection>.Value(connection);
-        this._reader = connection;
-        this._writer = connection;
-        this._client = false;
+        _init_stream(connection, connection, false);
+    }
+
+    # The setup both constructors share: the stream to read and write, which
+    # end this is, and an open connection with nothing read yet.
+    _init_stream(reader: io.Reader, writer: io.Writer, client: bool) {
+        this.max_message_size = DEFAULT_MAX_MESSAGE_SIZE;
+        this._reader = reader;
+        this._writer = writer;
+        this._client = client;
         this._buffer = Array<u8>();
         this._start = 0;
         this._close_sent = false;

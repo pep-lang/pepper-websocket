@@ -159,12 +159,21 @@ _accept_response(request: http.Request): u8[] {
     return (head + $"Sec-WebSocket-Accept: {accept_key(key)}\r\n\r\n").bytes();
 }
 
+# The header fields of a refusal with `status`, beyond its length: a `426`
+# names the version the server speaks.
+_refusal_fields(status: int): Array<(String, String)> {
+    var fields = [("Content-Type", "text/plain")];
+    if (status == 426) {
+        fields.append(("Sec-WebSocket-Version", "13"));
+    }
+    return fields;
+}
+
 # An `http.Server` handler's answer to a request it refuses with `status`.
 _refusal_response(status: int, message: String): http.Response {
     var response = http.Response(status).set_text(message);
-    response.headers["Content-Type"] = "text/plain";
-    if (status == 426) {
-        response.headers["Sec-WebSocket-Version"] = "13";
+    for (var (name, value) in _refusal_fields(status)) {
+        response.headers[name] = value;
     }
     return response;
 }
@@ -172,11 +181,11 @@ _refusal_response(status: int, message: String): http.Response {
 # The server's answer to a request it refuses with `status`.
 _refusal(status: int, message: String): u8[] {
     var head = $"HTTP/1.1 {status} {http.reason_phrase(status)}\r\n";
-    if (status == 426) {
-        head = head + "Sec-WebSocket-Version: 13\r\n";
+    for (var (name, value) in _refusal_fields(status)) {
+        head = head + $"{name}: {value}\r\n";
     }
     var body = message.bytes();
-    head = head + $"Content-Type: text/plain\r\nContent-Length: {body.count}\r\nConnection: close\r\n\r\n";
+    head = head + $"Content-Length: {body.count}\r\nConnection: close\r\n\r\n";
     var out = head.bytes();
     out.append_all(body);
     return out;

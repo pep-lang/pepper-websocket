@@ -111,30 +111,45 @@ _check_response(lines: String[], key: String): Result<void> {
 # with comes first in the message's tuple.
 _parse_request(lines: String[]): Result<http.Request, (int, String)> {
     var parts = lines[0].split(" ");
-    if (parts.count != 3 || parts[0] != "GET" || parts[2] != "HTTP/1.1") {
+    if (parts.count != 3 || parts[2] != "HTTP/1.1") {
         return Result<http.Request, (int, String)>.err((400, $"not a WebSocket upgrade request: '{lines[0]}'"));
     }
-    var request = http.Request("GET", parts[1]);
+    var request = http.Request(parts[0], parts[1]);
     var fields = _read_fields(lines, request.headers);
     if (fields.is_err()) {
         return Result<http.Request, (int, String)>.err((400, fields.error().message));
     }
+    var checked = _check_request(request);
+    if (checked.is_err()) {
+        return Result<http.Request, (int, String)>.err(checked.error());
+    }
+    return Result<http.Request, (int, String)>.ok(request);
+}
+
+# Checks that an HTTP/1.1 `request` asks for a WebSocket. On an error, the
+# status to answer with comes first in the message's tuple.
+_check_request(request: http.Request): Result<void, (int, String)> {
+    if (request.method != "GET") {
+        return Result<void, (int, String)>.err(
+            (400, $"not a WebSocket upgrade request: '{request.method} {request.url}'")
+        );
+    }
     if (!_has_token(request.headers, "Upgrade", "websocket") || !_has_token(request.headers, "Connection", "upgrade")) {
-        return Result<http.Request, (int, String)>.err((400, "the request does not ask to upgrade to websocket"));
+        return Result<void, (int, String)>.err((400, "the request does not ask to upgrade to websocket"));
     }
     var version = request.headers.get("Sec-WebSocket-Version");
     if (version.is_empty() || version.value() != "13") {
-        return Result<http.Request, (int, String)>.err((426, "the request does not ask for WebSocket version 13"));
+        return Result<void, (int, String)>.err((426, "the request does not ask for WebSocket version 13"));
     }
     var key = request.headers.get("Sec-WebSocket-Key");
     if (key.is_empty()) {
-        return Result<http.Request, (int, String)>.err((400, "the request has no Sec-WebSocket-Key"));
+        return Result<void, (int, String)>.err((400, "the request has no Sec-WebSocket-Key"));
     }
     var nonce = base64.decode(key.value());
     if (nonce.is_err() || nonce.value().count != 16) {
-        return Result<http.Request, (int, String)>.err((400, "the Sec-WebSocket-Key is not 16 bytes in base64"));
+        return Result<void, (int, String)>.err((400, "the Sec-WebSocket-Key is not 16 bytes in base64"));
     }
-    return Result<http.Request, (int, String)>.ok(request);
+    return Result<void, (int, String)>.ok();
 }
 
 # The server's answer to a valid request.
@@ -144,14 +159,33 @@ _accept_response(request: http.Request): u8[] {
     return (head + $"Sec-WebSocket-Accept: {accept_key(key)}\r\n\r\n").bytes();
 }
 
+# The header fields of a refusal with `status`, beyond its length: a `426`
+# names the version the server speaks.
+_refusal_fields(status: int): Array<(String, String)> {
+    var fields = [("Content-Type", "text/plain")];
+    if (status == 426) {
+        fields.append(("Sec-WebSocket-Version", "13"));
+    }
+    return fields;
+}
+
+# An `http.Server` handler's answer to a request it refuses with `status`.
+_refusal_response(status: int, message: String): http.Response {
+    var response = http.Response(status).set_text(message);
+    for (var (name, value) in _refusal_fields(status)) {
+        response.headers[name] = value;
+    }
+    return response;
+}
+
 # The server's answer to a request it refuses with `status`.
 _refusal(status: int, message: String): u8[] {
     var head = $"HTTP/1.1 {status} {http.reason_phrase(status)}\r\n";
-    if (status == 426) {
-        head = head + "Sec-WebSocket-Version: 13\r\n";
+    for (var (name, value) in _refusal_fields(status)) {
+        head = head + $"{name}: {value}\r\n";
     }
     var body = message.bytes();
-    head = head + $"Content-Type: text/plain\r\nContent-Length: {body.count}\r\nConnection: close\r\n\r\n";
+    head = head + $"Content-Length: {body.count}\r\nConnection: close\r\n\r\n";
     var out = head.bytes();
     out.append_all(body);
     return out;

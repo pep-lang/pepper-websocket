@@ -125,9 +125,11 @@ export struct WebSocket {
     ## connection with `CLOSE_TOO_BIG`.
     var max_message_size: ulong;
     # The connection: reads and writes go through `_reader` and `_writer`,
-    # the TLS stream when there is one and `_tcp` otherwise.
-    var _tcp: io.TcpStream;
+    # the TLS stream when there is one and `_tcp` otherwise, or the
+    # `http.Connection` a server handler took over (with no `_tcp`).
+    var _tcp: io.TcpStream?;
     var _tls: tls.TlsStream?;
+    var _connection: http.Connection?;
     var _reader: io.Reader;
     var _writer: io.Writer;
     # A client masks what it sends; a server requires masked frames.
@@ -147,15 +149,35 @@ export struct WebSocket {
     ## @param client true for the client end
     construct(tcp: io.TcpStream, stream: tls.TlsStream?, client: bool) {
         this.request = http.Request();
-        this.max_message_size = DEFAULT_MAX_MESSAGE_SIZE;
-        this._tcp = tcp;
+        this._tcp = Optional<io.TcpStream>.Value(tcp);
         this._tls = stream;
-        this._reader = tcp;
-        this._writer = tcp;
+        this._connection = Optional<http.Connection>.Empty;
         if (stream.is_value()) {
-            this._reader = stream.value();
-            this._writer = stream.value();
+            _init_stream(stream.value(), stream.value(), client);
+        } else {
+            _init_stream(tcp, tcp, client);
         }
+    }
+
+    ## Wraps a connection an `http.Server` handler took over after the
+    ## handshake's `101 Switching Protocols`. Use `accept(request, handler)`.
+    ##
+    ## @param request the client's handshake request
+    ## @param connection the connection the server handed over
+    construct(request: http.Request, connection: http.Connection) {
+        this.request = request;
+        this._tcp = Optional<io.TcpStream>.Empty;
+        this._tls = Optional<tls.TlsStream>.Empty;
+        this._connection = Optional<http.Connection>.Value(connection);
+        _init_stream(connection, connection, false);
+    }
+
+    # The setup both constructors share: the stream to read and write, which
+    # end this is, and an open connection with nothing read yet.
+    _init_stream(reader: io.Reader, writer: io.Writer, client: bool) {
+        this.max_message_size = DEFAULT_MAX_MESSAGE_SIZE;
+        this._reader = reader;
+        this._writer = writer;
         this._client = client;
         this._buffer = Array<u8>();
         this._start = 0;
@@ -272,6 +294,54 @@ export struct WebSocket {
         return WebSocket(tcp, Optional<tls.TlsStream>.Value(stream), false)._accept();
     }
 
+    ## Answers a WebSocket handshake `request` that an `http.Server`
+    ## handler got: returns the `101 Switching Protocols` response for the
+    ## handler to return, and once the server has sent it, calls `handler`
+    ## with the open connection in the connection's task. The connection
+    ## closes when `handler` returns. A WebSocket route so shares a port, and
+    ## the TLS of `http.Server.bind_tls`, with ordinary HTTP routes.
+    ##
+    ## A request that cannot be upgraded gets a refusal instead, and
+    ## `handler` is never called: `426 Upgrade Required` for a WebSocket
+    ## version other than 13, `400 Bad Request` for any other request that
+    ## is not a valid WebSocket upgrade, and `501 Not Implemented` for a
+    ## valid one that `request.can_upgrade()` rejects (HTTP/1.0, or an
+    ## HTTP/2 stream).
+    ##
+    ## A connection from here has no read timeout: `set_read_timeout`
+    ## returns an error.
+    ##
+    ## @param request the request the server handler got
+    ## @param handler speaks WebSocket on the connection, whose `request` is
+    ##   `request`
+    ## @returns the response the server handler returns
+    ## @example
+    ##     route(request: http.Request): http.Response {
+    ##         if (request.path() == "/chat") {
+    ##             return websocket.WebSocket.accept(request, (socket) => {
+    ##                 var message = socket.receive().value();
+    ##                 socket.send_text("you said " + message.text());
+    ##                 socket.close();
+    ##             });
+    ##         }
+    ##         return http.Response(200).set_text("hello");
+    ##     }
+    static accept(request: http.Request, handler: (WebSocket) => void): http.Response {
+        var checked = _check_request(request);
+        if (checked.is_err()) {
+            var (status, message) = checked.error();
+            return _refusal_response(status, message);
+        }
+        if (!request.can_upgrade()) {
+            return _refusal_response(501, "this connection cannot switch to WebSocket; use HTTP/1.1");
+        }
+        var response = http.Response().upgrade("websocket", (connection) => {
+            handler(WebSocket(request, connection));
+        });
+        response.headers["Sec-WebSocket-Accept"] = accept_key(request.headers.get("Sec-WebSocket-Key").value());
+        return response;
+    }
+
     ## Returns whether the connection is still open: no close was sent or
     ## received and no error closed it.
     ##
@@ -286,9 +356,14 @@ export struct WebSocket {
     ## never answer.
     ##
     ## @param milliseconds how long a read may wait; 0 to wait forever
-    ## @returns an Ok result; the platform error when the socket refuses it
+    ## @returns an Ok result; the platform error when the socket refuses it,
+    ##   and an error for a connection from `accept(request, handler)`
     set_read_timeout(milliseconds: ulong): Result<void> {
-        var set = _tcp.set_read_timeout(milliseconds);
+        if (_tcp.is_empty()) {
+            # shortcut: http.Connection has no read timeout; add one when the runtime's does.
+            return Result<void>.err(Error("a connection an http.Server took over has no read timeout"));
+        }
+        var set = _tcp.value().set_read_timeout(milliseconds);
         if (set.is_err()) {
             return Result<void>.err(Error(set.error().message));
         }
@@ -628,7 +703,12 @@ export struct WebSocket {
             _tls.value().shutdown();
             _tls.value().close();
         }
-        _tcp.close();
+        if (_tcp.is_value()) {
+            _tcp.value().close();
+        }
+        if (_connection.is_value()) {
+            _connection.value().close();
+        }
     }
 }
 
